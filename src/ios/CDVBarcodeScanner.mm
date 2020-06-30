@@ -42,6 +42,7 @@
 - (void)returnImage:(NSString*)filePath format:(NSString*)format callback:(NSString*)callback;
 - (void)returnSuccess:(NSString*)scannedText format:(NSString*)format cancelled:(BOOL)cancelled flipped:(BOOL)flipped callback:(NSString*)callback;
 - (void)returnError:(NSString*)message callback:(NSString*)callback;
+- (void)scanb64:(CDVInvokedUrlCommand*)command;
 @end
 
 //------------------------------------------------------------------------------
@@ -89,6 +90,7 @@
 
 - (id)initWithPlugin:(CDVBarcodeScanner*)plugin callback:(NSString*)callback stringToEncode:(NSString*)stringToEncode;
 - (void)generateImage;
+- (void)decodebase64;
 @end
 
 //------------------------------------------------------------------------------
@@ -234,6 +236,25 @@
                  ];
     // queue [processor generateImage] to run on the event loop
     [processor performSelector:@selector(generateImage) withObject:nil afterDelay:0];
+}
+
+
+
+- (void)scanb64:(CDVInvokedUrlCommand*)command {
+    if([command.arguments count] < 1)
+        [self returnError:@"Too few arguments!" callback:command.callbackId];
+
+    CDVqrProcessor* processor;
+    NSString*       callback;
+    callback = command.callbackId;
+
+    processor = [[CDVqrProcessor alloc]
+                 initWithPlugin:self
+                 callback:callback
+                 stringToEncode: command.arguments[0][@"data"]
+                 ];
+    // queue [processor decodebase64] to run on the event loop
+    [processor performSelector:@selector(decodebase64) withObject:nil afterDelay:0];
 }
 
 - (void)returnImage:(NSString*)filePath format:(NSString*)format callback:(NSString*)callback{
@@ -674,6 +695,69 @@ parentViewController:(UIViewController*)parentViewController
     self.plugin = nil;
     self.callback = nil;
     self.stringToEncode = nil;
+}
+
+-(NSArray *)qrFromImage:(UIImage *) image
+{
+    @autoreleasepool {
+        NSLog(@"%@ :: %@", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
+        NSCAssert(image != nil, @"**Assertion Error** qrFromImage : image is nil");
+
+        CIImage* ciImage = image.CIImage; // assuming underlying data is a CIImage
+        //CIImage* ciImage = [[CIImage alloc] initWithCGImage: image.CGImage];
+        // to use if the underlying data is a CGImage
+
+        NSDictionary* options;
+        CIContext* context = [CIContext context];
+        options = @{ CIDetectorAccuracy : CIDetectorAccuracyHigh }; // Slow but thorough
+        //options = @{ CIDetectorAccuracy : CIDetectorAccuracyLow}; // Fast but superficial
+
+        CIDetector* qrDetector = [CIDetector detectorOfType:CIDetectorTypeQRCode
+                                                    context:context
+                                                    options:options];
+        if ([[ciImage properties] valueForKey:(NSString*) kCGImagePropertyOrientation] == nil) {
+            options = @{ CIDetectorImageOrientation : @1};
+        } else {
+            options = @{ CIDetectorImageOrientation : [[ciImage properties] valueForKey:(NSString*) kCGImagePropertyOrientation]};
+        }
+
+        NSArray * features = [qrDetector featuresInImage:ciImage
+                                                 options:options];
+
+        return features;
+
+    }
+}
+
+
+- (UIImage *) base64ToImage:(NSString *) base64String
+{
+	NSURL *url = [NSURL URLWithString:base64String];
+    NSData *imageData = [NSData dataWithContentsOfURL:url];
+    UIImage *image = [UIImage imageWithData:imageData];
+	return image;
+}
+
+- (void)decodebase64{
+	UIImage* image = [self base64ToImage:self.stringToEncode];
+	if(image != nil){
+		NSArray *features = [self qrFromImage:image];
+		NSString *decodedText = @"";
+		if (features != nil && features.count > 0) {
+			for (CIQRCodeFeature* qrFeature in features) {
+				NSLog(@"QRFeature.messageString : %@ ", qrFeature.messageString);
+				decodedText = [decodedText stringByAppendingString:qrFeature.messageString];				
+				break;
+			}
+		[self returnSuccess:decodedText format:@"" cancelled:FALSE flipped:FALSE callback: self.callback];					
+		}else{
+		NSString * error = NSLocalizedString(@"Couldn't decode QR CODE",nil);
+        [self returnError:error callback: self.callback];					
+		}
+	}else{
+		NSString * error = NSLocalizedString(@"Cannot convert to image base64 string provided",nil);
+        [self returnError:error callback: self.callback];		
+	}
 }
 //--------------------------------------------------------------------------
 - (void)generateImage{

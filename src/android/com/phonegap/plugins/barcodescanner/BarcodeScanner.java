@@ -15,7 +15,10 @@ import org.json.JSONObject;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Bundle;
+import android.util.Base64;
 import android.util.Log;
 import android.content.pm.PackageManager;
 
@@ -24,9 +27,14 @@ import org.apache.cordova.CallbackContext;
 import org.apache.cordova.PluginResult;
 import org.apache.cordova.PermissionHelper;
 
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.RGBLuminanceSource;
+import com.google.zxing.Result;
 import com.google.zxing.client.android.CaptureActivity;
 import com.google.zxing.client.android.encode.EncodeActivity;
 import com.google.zxing.client.android.Intents;
+import com.google.zxing.common.HybridBinarizer;
 
 /**
  * This calls out to the ZXing barcode reader and returns the result.
@@ -57,6 +65,7 @@ public class BarcodeScanner extends CordovaPlugin {
     private static final String EMAIL_TYPE = "EMAIL_TYPE";
     private static final String PHONE_TYPE = "PHONE_TYPE";
     private static final String SMS_TYPE = "SMS_TYPE";
+    private static final String SCAN_BASE64 = "scanb64";
 
     private static final String LOG_TAG = "BarcodeScanner";
 
@@ -121,7 +130,17 @@ public class BarcodeScanner extends CordovaPlugin {
             } else {
               scan(args);
             }
-        } else {
+        }else if(action.equals(SCAN_BASE64)){
+            JSONObject obj = args.optJSONObject(0);
+            if (obj != null) {
+                String data = obj.optString(DATA);
+                scanBase64(data);
+            }else {
+                callbackContext.error("User did not specify base64 string to decode");
+                return true;
+            }
+        }
+        else {
             return false;
         }
         return true;
@@ -325,4 +344,70 @@ public class BarcodeScanner extends CordovaPlugin {
         this.callbackContext = callbackContext;
     }
 
+    public void scanBase64(String param){
+        final CordovaPlugin that = this;
+
+        cordova.getThreadPool().execute(new Runnable() {
+            public void run() {
+                QRResult qrResult = decodeQRFromBase64(param);
+                if(qrResult.result == DecodeResult.OK) {
+                    JSONObject obj = new JSONObject();
+                    try {
+                        obj.put(TEXT, qrResult.data.getText());
+                        obj.put(FORMAT, qrResult.data.getBarcodeFormat());
+                        obj.put(CANCELLED, false);
+                    } catch (JSONException e) {
+                        Log.d(LOG_TAG, "This should never happen");
+                    }
+                    //this.success(new PluginResult(PluginResult.Status.OK, obj), this.callback);
+                    callbackContext.success(obj);
+                }else if(qrResult.result == DecodeResult.BITMAP_DECODE_ERROR){
+                    callbackContext.error("Error parsing bitmap from base64");
+                }else if(qrResult.result == DecodeResult.QR_DECODE_ERROR){
+                    callbackContext.error("Error decoding QR from bitmap");
+                }else{
+                    callbackContext.error("Unknown error");
+                }
+            }
+        });
+    }
+
+    // private String decodeQRFromFile(String filePath)
+        // throws FileNotFoundException, IOException, NotFoundException {
+        // BinaryBitmap binaryBitmap = new BinaryBitmap(new HybridBinarizer(
+            // new BufferedImageLuminanceSource(
+                // ImageIO.read(new FileInputStream(filePath)))));
+        // Result qrCodeResult = new MultiFormatReader().decode(binaryBitmap);
+        // return qrCodeResult.getText();
+    // }
+    private enum DecodeResult {
+        OK,
+        BITMAP_DECODE_ERROR,
+        QR_DECODE_ERROR
+    }
+     protected class QRResult {
+        public DecodeResult result;
+        public Result data;
+        public QRResult(DecodeResult result,Result data){
+            this.result = result;
+            this.data = data;
+        }
+    }
+     protected QRResult decodeQRFromBase64(String data){
+        try {
+            String base64img = data.substring(data.indexOf(",") + 1);
+            byte[] decoded = Base64.decode(base64img, Base64.DEFAULT);
+            Bitmap bmp = BitmapFactory.decodeByteArray(decoded, 0, decoded.length);
+            if(bmp == null){
+                return new QRResult(DecodeResult.BITMAP_DECODE_ERROR,null);
+            }
+            int[] intArray = new int[bmp.getWidth() * bmp.getHeight()];
+            bmp.getPixels(intArray, 0, bmp.getWidth(), 0, 0, bmp.getWidth(), bmp.getHeight());
+            BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(new RGBLuminanceSource(bmp.getWidth(), bmp.getHeight(), intArray)));
+            Result result = new MultiFormatReader().decode(bitmap);
+            return new QRResult(DecodeResult.OK,result);
+        }catch (Exception e){
+            return new QRResult(DecodeResult.QR_DECODE_ERROR,null);
+        }
+     }
 }
